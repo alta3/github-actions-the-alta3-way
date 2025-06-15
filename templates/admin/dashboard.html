@@ -1,0 +1,31 @@
+{{define "content"}}
+<div class="bg-white p-6 rounded-lg shadow-md">
+    <p class="text-lg text-gray-700">Welcome to the FIRM Admin Dashboard! Here you can monitor the system status and manage configurations.</p>
+    <div class="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div class="bg-indigo-100 p-4 rounded-lg shadow-sm">
+            <h2 class="text-xl font-semibold text-indigo-800">Total Verified Emails</h2>
+            <p class="text-3xl font-bold text-indigo-900 mt-2">{{.Stats.TotalVerifiedEmails}}</p>
+        </div>
+        <div class="bg-green-100 p-4 rounded-lg shadow-sm">
+            <h2 class="text-xl font-semibold text-green-800">Active JWTs</h2>
+            <p class="text-3xl font-bold text-green-900 mt-2">{{.Stats.ActiveJWTs}}</p>
+        </div>
+        <div class="bg-red-100 p-4 rounded-lg shadow-sm">
+            <h2 class="text-xl font-semibold text-red-800">Blocked IPs Today</h2>
+            <p class="text-3xl font-bold text-red-900 mt-2">{{.Stats.BlockedIPsToday}}</p>
+        </div>
+    </div>
+    <h2 class="text-2xl font-semibold mt-8 mb-4 text-gray-800">Recent Admin Events</h2>
+    <div class="bg-gray-50 p-4 rounded-lg shadow-sm">
+        <ul class="divide-y divide-gray-200">
+            {{range .RecentAdminEvents}}
+            <li class="py-2 text-gray-700">
+                <span class="font-medium text-gray-900">{{.Timestamp}}</span>: {{.Actor}} {{.Action}} {{.Target}} ({{.Notes}})
+            </li>
+            {{else}}
+            <li class="py-2 text-gray-500">No recent admin events.</li>
+            {{end}}
+        </ul>
+    </div>
+</div>
+{{end}}
