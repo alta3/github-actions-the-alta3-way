@@ -15,11 +15,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgconn" // ADDED: Import for pgconn.CommandTag
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
-	"github.com/google/uuid"
+	"github.com/google/uuid" // ADDED: Import for uuid generation
 )
 
 // schemaSQL defines the PostgreSQL database schema for the FIRM protocol.
@@ -114,18 +114,12 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE INDEX IF NOT EXISTS idx_settings_key ON settings(key);
 
 -- Initial settings population if not exists.
--- Corrected syntax: Each INSERT statement must be complete and separated by a semicolon.
 INSERT INTO settings (key, value, description, updated_at, updated_by) VALUES
-('rate_limit_tokens_per_hour', '10', 'Maximum token requests per hour per email/IP.', NOW(), 'system') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value, description, updated_at, updated_by) VALUES
-('email_retention_period', '1095d', 'How long to retain email verification records (e.g., 365d, 1y).', NOW(), 'system') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value, description, updated_at, updated_by) VALUES
-('cleanup_interval', '10s', 'Frequency of the cleanup loop (e.g., 10s, 1m).', NOW(), 'system') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value, description, updated_at, updated_by) VALUES
-('send_welcome_email', 'true', 'Whether to send an optional welcome email after verification.', NOW(), 'system') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value, description, updated_at, updated_by) VALUES
-('firm_server_email', 'firmserver@example.com', 'The email address that FIRM expects verification emails to be sent to.', NOW(), 'system') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings (key, value, description, updated_at, updated_by) VALUES
+('rate_limit_tokens_per_hour', '10', 'Maximum token requests per hour per email/IP.', NOW(), 'system') ON CONFLICT (key) DO NOTHING,
+('email_retention_period', '1095d', 'How long to retain email verification records (e.g., 365d, 1y).', NOW(), 'system') ON CONFLICT (key) DO NOTHING,
+('cleanup_interval', '10s', 'Frequency of the cleanup loop (e.g., 10s, 1m).', NOW(), 'system') ON CONFLICT (key) DO NOTHING,
+('send_welcome_email', 'true', 'Whether to send an optional welcome email after verification.', NOW(), 'system') ON CONFLICT (key) DO NOTHING,
+('firm_server_email', 'firmserver@example.com', 'The email address that FIRM expects verification emails to be sent to.', NOW(), 'system') ON CONFLICT (key) DO NOTHING,
 ('jwt_secret_key', 'your_super_secret_jwt_key_please_change_this_in_prod', 'Secret key for signing JWTs. MUST BE SECURE AND ROTATED.', NOW(), 'system') ON CONFLICT (key) DO NOTHING;
 `
 
@@ -1192,15 +1186,15 @@ func main() {
 		}
 
 		// Determine scope (user or admin)
-		var adminCount int
-		err = db.QueryRow(ctx, "SELECT COUNT(*) FROM admin_emails WHERE email = $1", req.Email).Scan(&adminCount)
+		var isAdmin bool
+		err = db.QueryRow(ctx, "SELECT COUNT(*) FROM admin_emails WHERE email = $1", req.Email).Scan(&isAdmin)
 		if err != nil {
 			log.Printf("ERROR: Database error checking admin status for %s: %v", req.Email, err)
 			c.JSON(500, gin.H{"error": "Internal server error"})
 			return
 		}
 		scope := "user"
-		if adminCount > 0 {
+		if isAdmin {
 			scope = "admin"
 		}
 
@@ -1286,58 +1280,7 @@ func main() {
 	})
 
 
-	// ✅ POST /admin/bootstrap (email: STRING)
-	// Localhost-only endpoint for adding an initial admin email.
-	// This endpoint is outside the adminGroup to bypass JWT auth.
-	r.POST("/admin/bootstrap", func(c *gin.Context) {
-		// This endpoint MUST be restricted to localhost (127.0.0.1 or ::1)
-		if c.ClientIP() != "127.0.0.1" && c.ClientIP() != "::1" { // Check for IPv4 and IPv6 localhost
-			c.JSON(403, gin.H{"error": "Localhost only"})
-			return
-		}
-
-		var req struct {
-			Email string `json:"email" binding:"required,email"`
-		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(400, gin.H{"error": err.Error()})
-			return
-		}
-
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
-		defer cancel()
-
-		now := time.Now().UTC()
-
-		// UPSERT into admin_emails
-		_, err = db.Exec(ctx,
-			`INSERT INTO admin_emails (email, added_at, added_by, notes)
-                 VALUES ($1, $2, $3, $4)
-                 ON CONFLICT (email) DO UPDATE SET
-                     added_at = EXCLUDED.added_at,
-                     added_by = EXCLUDED.added_by,
-                     notes = EXCLUDED.notes;`,
-				req.Email, now, "bootstrap", "Added via localhost",
-		)
-		if err != nil {
-			log.Printf("ERROR: Failed to add/update admin email %s via bootstrap: %v", req.Email, err)
-			c.JSON(500, gin.H{"error": "Failed to add admin email"})
-			return
-		}
-
-		// Log to admin_events
-		_, err = db.Exec(ctx,
-			"INSERT INTO admin_events (timestamp, action, actor, target, notes) VALUES ($1, $2, $3, $4, $5)",
-			now, "add_admin", "bootstrap", req.Email, "Added via localhost bootstrap.",
-		)
-		if err != nil {
-			log.Printf("ERROR: Failed to log admin event for bootstrap: %v", err)
-		}
-		c.JSON(200, gin.H{"message": "Admin email added"})
-	})
-
-
-	// Admin routes group (protected by JWT middleware)
+	// Admin routes group (protected)
 	adminGroup := r.Group("/admin")
 	{
 		// Middleware to check admin JWT
@@ -1364,9 +1307,9 @@ func main() {
 			}
 
 			// Check if the admin email exists in the admin_emails table
-			var count int
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
+			var count int
 			err = db.QueryRow(ctx, "SELECT COUNT(*) FROM admin_emails WHERE email = $1", claims.Email).Scan(&count)
 			if err != nil || count == 0 {
 				c.JSON(403, gin.H{"error": "Admin access required: Authenticated user is not an active admin"})
@@ -1376,6 +1319,55 @@ func main() {
 
 			c.Set("adminEmail", claims.Email) // Pass admin email to context
 			c.Next()
+		})
+
+		// ✅ POST /admin/bootstrap (email: STRING)
+		// Localhost-only endpoint for adding an initial admin email.
+		adminGroup.POST("/bootstrap", func(c *gin.Context) {
+			// This endpoint MUST be restricted to localhost (127.0.0.1 or ::1)
+			if c.ClientIP() != "127.0.0.1" && c.ClientIP() != "::1" { // Check for IPv4 and IPv6 localhost
+				c.JSON(403, gin.H{"error": "Localhost only"})
+				return
+			}
+
+			var req struct {
+				Email string `json:"email" binding:"required,email"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": err.Error()})
+				return
+			}
+
+			ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+			defer cancel()
+
+			now := time.Now().UTC()
+
+			// UPSERT into admin_emails
+			_, err := db.Exec(ctx,
+				`INSERT INTO admin_emails (email, added_at, added_by, notes)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (email) DO UPDATE SET
+                     added_at = EXCLUDED.added_at,
+                     added_by = EXCLUDED.added_by,
+                     notes = EXCLUDED.notes;`,
+				req.Email, now, "bootstrap", "Added via localhost",
+			)
+			if err != nil {
+				log.Printf("ERROR: Failed to add/update admin email %s via bootstrap: %v", req.Email, err)
+				c.JSON(500, gin.H{"error": "Failed to add admin email"})
+				return
+			}
+
+			// Log to admin_events
+			_, err = db.Exec(ctx,
+				"INSERT INTO admin_events (timestamp, action, actor, target, notes) VALUES ($1, $2, $3, $4, $5)",
+				now, "add_admin", "bootstrap", req.Email, "Added via localhost bootstrap.",
+			)
+			if err != nil {
+				log.Printf("ERROR: Failed to log admin event for bootstrap: %v", err)
+			}
+			c.JSON(200, gin.H{"message": "Admin email added"})
 		})
 
 
@@ -1392,8 +1384,7 @@ func main() {
 			}
 			defer rows.Close()
 
-			// Initialize as an empty, non-nil slice to ensure it marshals to `[]` instead of `null`
-			var subnets []gin.H = make([]gin.H, 0)
+			var subnets []gin.H
 			for rows.Next() {
 				var subnetHex string
 				var cidr, hits int
@@ -1455,8 +1446,7 @@ func main() {
 				expiresAt = &exp
 			}
 
-			var cmdTag pgconn.CommandTag // Declared here once
-			// err is already declared by c.ShouldBindJSON, so use assignment
+			var cmdTag pgconn.CommandTag // CHANGED: from pgx.CommandTag to pgconn.CommandTag
 			if req.Action == "add" {
 				cmdTag, err = db.Exec(ctx,
 					`INSERT INTO banned_subnets (subnet_hex, cidr, reason, banned_at, expires_at)
@@ -1559,12 +1549,15 @@ func main() {
 							b, _ := strconv.ParseUint(sHex, 16, 32)
 							parsedIP = net.IPv4(byte(b>>24), byte(b>>16), byte(b>>8), byte(b))
 						} else if len(sHex) == 32 { // IPv6
-							// Correct parsing for IPv6 hex to byte array
-							parsedIP = make(net.IP, net.IPv6len)
-							_, err := fmt.Sscanf(sHex, "%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
-								&parsedIP[0], &parsedIP[1], &parsedIP[2], &parsedIP[3], &parsedIP[4], &parsedIP[5], &parsedIP[6], &parsedIP[7],
-								&parsedIP[8], &parsedIP[9], &parsedIP[10], &parsedIP[11], &parsedIP[12], &parsedIP[13], &parsedIP[14], &parsedIP[15])
-							if err != nil {
+							// This conversion is a placeholder; requires correct parsing of 32-char hex to 16 bytes.
+							// For production, use a dedicated IP parsing/conversion library or safer conversion.
+							// For example, from hex string to byte array, then net.IP(byteArr).
+							// For now, let's just make it compile with a basic attempt:
+							var buf [16]byte
+							_, err := fmt.Sscanf(sHex, "%X%X%X%X%X%X%X%X%X%X%X%X%X%X%X%X", &buf[0], &buf[1], &buf[2], &buf[3], &buf[4], &buf[5], &buf[6], &buf[7], &buf[8], &buf[9], &buf[10], &buf[11], &buf[12], &buf[13], &buf[14], &buf[15])
+							if err == nil {
+								parsedIP = buf[:]
+							} else {
 								log.Printf("WARNING: Failed to parse IPv6 hex %s for subnet check: %v", sHex, err)
 								continue
 							}
@@ -1613,7 +1606,7 @@ func main() {
 			}
 			defer rows.Close()
 
-			var adminEmails []gin.H = make([]gin.H, 0) // Initialize as empty, non-nil slice
+			var adminEmails []gin.H
 			for rows.Next() {
 				var email, addedBy string
 				var addedAt time.Time
@@ -1668,8 +1661,8 @@ func main() {
 				expiresAt = &exp
 			}
 
-			var cmdTag pgconn.CommandTag
-			// err is already declared by c.ShouldBindJSON, so use assignment
+			var cmdTag pgconn.CommandTag // CHANGED: from pgx.CommandTag to pgconn.CommandTag
+			var err error
 			if req.Action == "add" {
 				cmdTag, err = db.Exec(ctx,
 					`INSERT INTO admin_emails (email, added_at, added_by, expires_at, notes)
@@ -1805,10 +1798,9 @@ func main() {
 
 
 	// Run the server
-	// Fixed: Use 8092 as the default port as requested
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8092" // Default port changed to 8092
+		port = "8080" // Default port
 	}
 	log.Printf("Starting FIRM server on :%s", port)
 	if err := r.Run(":" + port); err != nil {

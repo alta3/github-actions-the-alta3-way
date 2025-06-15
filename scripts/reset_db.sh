@@ -1,11 +1,3 @@
-#!/bin/bash
-
-# scripts/reset_db.sh
-# Resets the FIRM database for test mode by dropping and reinitializing it.
-# Requires user to type "eraseDB" to proceed, preventing accidental data loss.
-# Loads secrets from .env using set -a; source .env; set +a.
-# Drops the 'firm' database using superuser credentials, then runs main.go to recreate it.
-# Designed for Go 1.24.2 linux/amd64, with public usability.
 # WARNING: This will DELETE ALL DATA in the firm database!
 # Prerequisites: PostgreSQL, .env with PG_USER, PG_PASSWORD, etc., firm.conf.
 
@@ -47,7 +39,7 @@ if [ ! -f ".env" ]; then
 fi
 
 # Check for firm.conf
-if [ ! -f "firm.conf" ]; then
+if [ ! -f "firm.toml" ]; then
     echo "❌ firm.conf not found. Create it with [settings] section."
     exit 1
 fi
@@ -65,19 +57,16 @@ if [ -z "$PG_USER" ] || [ -z "$PG_PASSWORD" ] || [ -z "$PG_HOST" ] || [ -z "$PG_
 fi
 
 # Drop database using psql
-echo "🗑️ Dropping database $PG_DB..."
-PGPASSWORD=$PG_PASSWORD psql -U $PG_USER -h $PG_HOST -p $PG_PORT -d postgres -c "DROP DATABASE IF EXISTS $PG_DB;" || {
+echo "🗑️  Dropping database $PG_DB..."
+PGPASSWORD=$PG_PASSWORD psql -U "$PG_USER" -h "$PG_HOST" -p "$PG_PORT" -d postgres -c "DROP DATABASE IF EXISTS \"$PG_DB\";" || {
     echo "❌ Failed to drop database. Check credentials in .env."
     exit 1
 }
 
-# Reinitialize database via main.go
-echo "🛠️ Reinitializing database $PG_DB..."
-go run main.go || {
-    echo "❌ Failed to reinitialize database. Check main.go, .env, and firm.conf."
+# --- ADD THIS SECTION ---
+# Create database using psql
+echo "✨ Creating database $PG_DB..."
+PGPASSWORD=$PG_PASSWORD psql -U "$PG_USER" -h "$PG_HOST" -p "$PG_PORT" -d postgres -c "CREATE DATABASE \"$PG_DB\" OWNER \"$PG_USER\";" || {
+    echo "❌ Failed to create database. Ensure user '$PG_USER' has CREATE DATABASE privileges."
     exit 1
 }
-
-echo "✅ Database reset successfully!"
-echo "📝 Schema applied from db/schema.sql."
-echo "🚀 Ready for testing with updated schema."
