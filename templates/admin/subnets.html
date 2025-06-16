@@ -1,5 +1,7 @@
-{{define "content"}}
-<div class="bg-white p-6 rounded-lg shadow-md">
+{{template "layout.html" .}} {{/* IMPORTANT: This tells it to render layout.html */}}
+
+{{define "content"}} {{/* This defines the content block for layout.html */}}
+<div class="bg-white p-6 rounded-lg shadow-md mb-8">
     <h2 class="text-2xl font-semibold mb-4 text-gray-800">Manage Banned Subnets</h2>
 
     <div class="mb-8">
@@ -46,37 +48,79 @@
                 </tr>
             </thead>
             <tbody id="subnets-table-body" class="bg-white divide-y divide-gray-200">
-                {{range .Subnets}}
                 <tr>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{{.subnet_hex}}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">/{{.cidr}}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{.reason}}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{.banned_at}}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {{if .expires_at}}{{.expires_at}}{{else}}Never{{end}}
-                    </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{.hits}}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        <button onclick="deleteSubnet('{{.subnet_hex}}', {{.cidr}})" class="text-red-600 hover:text-red-900 ml-4">Delete</button>
-                    </td>
+                    <td colspan="7" class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">Loading banned subnets...</td>
                 </tr>
-                {{else}}
-                <tr>
-                    <td colspan="7" class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">No banned subnets found.</td>
-                </tr>
-                {{end}}
             </tbody>
         </table>
     </div>
 </div>
 
 <script>
-    const adminToken = localStorage.getItem('admin_token'); // Assuming JWT stored in local storage for simplicity
+    const adminToken = localStorage.getItem('admin_token');
+    const apiBase = ''; // Relative path, or set to 'http://localhost:8092' if different host/port
+
+    async function fetchSubnets() {
+        const subnetsTableBody = document.getElementById('subnets-table-body');
+        if (!adminToken) {
+            subnetsTableBody.innerHTML = '<tr><td colspan="7" class="px-6 py-4 whitespace-nowrap text-sm text-red-500 text-center">Authentication required. Please set admin_token in Local Storage.</td></tr>';
+            return;
+        }
+
+        try {
+            const response = await fetch(`${apiBase}/admin/api/subnets`, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${adminToken}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || `HTTP error! Status: ${response.status}`);
+            }
+
+            const subnets = await response.json();
+            subnetsTableBody.innerHTML = ''; // Clear loading message
+
+            if (subnets.length > 0) {
+                subnets.forEach(subnet => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${subnet.subnet_hex}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">/${subnet.cidr}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${subnet.reason || ''}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${new Date(subnet.banned_at).toLocaleString()}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            ${subnet.expires_at ? new Date(subnet.expires_at).toLocaleString() : 'Never'}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${subnet.hits}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                            <button onclick="deleteSubnet('${subnet.subnet_hex}', ${subnet.cidr})" class="text-red-600 hover:text-red-900 ml-4">Delete</button>
+                        </td>
+                    `;
+                    subnetsTableBody.appendChild(row);
+                });
+            } else {
+                subnetsTableBody.innerHTML = '<tr><td colspan="7" class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">No banned subnets found.</td></tr>';
+            }
+
+        } catch (error) {
+            console.error('Error fetching subnets:', error);
+            subnetsTableBody.innerHTML = `<tr><td colspan="7" class="px-6 py-4 whitespace-nowrap text-sm text-red-500 text-center">Error loading subnets: ${error.message}. Check server logs or JWT.</td></tr>`;
+        }
+    }
 
     document.getElementById('add-subnet-form').addEventListener('submit', async function(event) {
         event.preventDefault();
         const formData = new FormData(event.target);
         const data = Object.fromEntries(formData.entries());
+
+        if (!adminToken) {
+            alert('Authentication required to add subnet. Please set admin_token in Local Storage.');
+            return;
+        }
 
         // Convert CIDR and expires_in_days to numbers if they exist
         if (data.cidr) data.cidr = parseInt(data.cidr, 10);
@@ -84,11 +128,11 @@
         data.action = "add"; // Always add for this form
 
         try {
-            const response = await fetch('/admin/subnet', {
+            const response = await fetch(`${apiBase}/admin/api/subnet`, { // Corrected API path
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': 
+                    'Authorization': `Bearer ${adminToken}`
                 },
                 body: JSON.stringify(data)
             });
@@ -96,27 +140,31 @@
             const result = await response.json();
             if (response.ok) {
                 alert('Subnet added successfully!');
-                location.reload(); // Reload page to show new subnet
+                fetchSubnets(); // Reload subnets after successful add
             } else {
                 alert('Error adding subnet: ' + (result.error || 'Unknown error'));
             }
         } catch (error) {
-            console.error('Network error:', error);
+                console.error('Network error:', error);
             alert('Network error when adding subnet.');
         }
     });
 
     async function deleteSubnet(subnet_hex, cidr) {
+        if (!adminToken) {
+            alert('Authentication required to delete subnet. Please set admin_token in Local Storage.');
+            return;
+        }
         if (!confirm(`Are you sure you want to delete subnet ${subnet_hex}/${cidr}?`)) {
             return;
         }
 
         try {
-            const response = await fetch('/admin/subnet', {
+            const response = await fetch(`${apiBase}/admin/api/subnet`, { // Corrected API path
                 method: 'POST', // Admin subnet uses POST for add/delete/change
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': 
+                    'Authorization': `Bearer ${adminToken}`
                 },
                 body: JSON.stringify({
                     subnet: subnet_hex,
@@ -128,7 +176,7 @@
             const result = await response.json();
             if (response.ok) {
                 alert('Subnet deleted successfully!');
-                location.reload(); // Reload page to remove deleted subnet
+                fetchSubnets(); // Reload subnets after successful delete
             } else {
                 alert('Error deleting subnet: ' + (result.error || 'Unknown error'));
             }
@@ -138,9 +186,7 @@
         }
     }
 
-    // Function to ensure adminToken is available (e.g., from login)
-    // In a real app, admin would log in, get JWT, and store it.
-    // For this dev UI, you might manually set it in browser console for initial testing.
-    // E.g., localStorage.setItem('admin_token', 'your_jwt_from_inbound_admin_call');
+    // Fetch data when the page loads
+    window.addEventListener('load', fetchSubnets);
 </script>
 {{end}}

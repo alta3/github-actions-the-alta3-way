@@ -112,7 +112,7 @@ fi
 echo "✅ Extracted FIRM Token for $ADMIN_EMAIL: $ADMIN_FIRM_TOKEN"
 echo ""
 
-# --- STEP 5: Simulate inbound verification for the admin email to get an ADMIN JWT ---
+# --- STEP 5: Simulating inbound verification for the admin email to get an ADMIN JWT ---
 echo "--- Step 5: Simulating inbound email verification for admin ($ADMIN_EMAIL) ---"
 ADMIN_INBOUND_RESPONSE=$(curl -s -X POST "$API_BASE/inbound" \
   -H "Content-Type: application/json" \
@@ -138,21 +138,35 @@ fi
 echo "✅ Received Admin Refresh Token (first 20 chars): ${ADMIN_REFRESH_TOKEN:0:20}..."
 echo ""
 
-# --- STEP 6: Test accessing a protected admin endpoint with the ADMIN JWT ---
-echo "--- Step 6: Accessing protected admin endpoint /admin/subnets ---"
-PROTECTED_ADMIN_RESPONSE=$(curl -s -X GET "$API_BASE/admin/subnets" \
+# --- STEP 6: Test accessing a protected admin API endpoint with the ADMIN JWT ---
+# IMPORTANT: The API endpoint for JSON data is now /admin/api/subnets, not /admin/subnets
+echo "--- Step 6: Accessing protected admin API endpoint /admin/api/subnets ---"
+PROTECTED_ADMIN_RESPONSE=$(curl -s -X GET "$API_BASE/admin/api/subnets" \
   -H "Authorization: Bearer $ADMIN_REFRESH_TOKEN")
 
-echo "✅ Protected Admin Endpoint Response (should be 200 OK):"
+echo "✅ Protected Admin API Endpoint Response (should be 200 OK and a JSON array):"
 echo "$PROTECTED_ADMIN_RESPONSE" | jq .
 
-# Optionally check if the response indicates success (e.g., is a JSON array)
+# Check if the response indicates success (e.g., is a JSON array)
 if echo "$PROTECTED_ADMIN_RESPONSE" | jq -e 'type == "array"' >/dev/null; then
-  echo "✅ Successfully accessed /admin/subnets (received JSON array)."
+  echo "✅ Successfully accessed /admin/api/subnets (received JSON array)."
 else
-  echo "❌ Failed to access /admin/subnets. Response was not a JSON array or indicated an error."
+  echo "❌ Failed to access /admin/api/subnets. Response was not a JSON array or indicated an error."
+  echo "Full response: $PROTECTED_ADMIN_RESPONSE"
   exit 1
 fi
 
 echo ""
 echo "🎉 All tests completed successfully! 🎉"
+echo ""
+echo "------------------------------------------------------------------------"
+echo "🌐 To access the Admin Dashboard in your browser:"
+echo "   1. Open: $API_BASE/admin/dashboard"
+echo "   2. Open Browser Developer Tools (F12) -> Application/Storage -> Local Storage -> $API_BASE"
+echo "   3. Add a new item:"
+echo "      Key: admin_token"
+echo "      Value: $ADMIN_REFRESH_TOKEN"
+echo "   4. Refresh the dashboard page."
+echo "------------------------------------------------------------------------"
+echo ""
+

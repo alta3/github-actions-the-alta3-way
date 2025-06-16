@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"html/template" // Import for HTML templates
 	"log"
 	"net"
 	"os"
@@ -15,7 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgconn" // Import for pgconn.CommandTag
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
@@ -359,7 +360,7 @@ func initDB() {
 	log.Println("✅ Database schema initialized successfully.")
 
 	// Load initial global settings from the database
-	firmServerEmail = getSetting("firm_server_email", "firmserver@example.com")
+	firmServerEmail = getSetting("firm_server_email", "firmserver@example.m")
 	jwtSecretKey = []byte(getSetting("jwt_secret_key", "your_super_secret_jwt_key_please_change_this_in_prod"))
 	if string(jwtSecretKey) == "your_super_secret_jwt_key_please_change_this_in_prod" {
 		log.Println("WARNING: Using default JWT secret key. Please change 'jwt_secret_key' in settings table or .env file.")
@@ -739,6 +740,13 @@ func autoIPBanMiddleware() gin.HandlerFunc {
 
 
 func main() {
+	// Dummy use of imported packages to prevent "imported and not used" errors
+	// These are here to satisfy the Go compiler's strictness about unused imports
+	// which can happen with indirect usage (e.g., Gin's template engine or type definitions).
+	_ = template.HTMLEscapeString // Use a function from html/template
+	_ = pgconn.CommandTag{}       // Use a type from pgconn
+
+
 	// ✅ Load environment variables from .env or system and log success
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, relying on system environment variables.")
@@ -792,6 +800,18 @@ func main() {
 	r := gin.Default()
 	log.Println("✅ Gin router initialized.")
 
+	// Configure template loading
+	// Load all templates including the layout
+	// IMPORTANT: When you have a base layout and content templates, Gin's LoadHTMLGlob
+	// will parse all files. Then, when calling c.HTML, you specify the name of the base layout template
+	// (e.g., "base.html") and the data will include ContentTemplate to tell base.html what content to render.
+	r.LoadHTMLGlob("templates/**/*.html")
+	// Configure static file serving
+	r.Static("/static", "./static")
+	// Favicon.ico specific handler
+	r.StaticFile("/favicon.ico", "./static/favicon.ico")
+
+
 	// ✅ Middleware: IP Logging and auto IP Ban (or unban)
 	// These run for every incoming request
 	r.Use(ipActivityMiddleware())
@@ -808,7 +828,7 @@ func main() {
 		ExpiresAt time.Time
 	})
 
-	// /test route (POST) - For simulating signup without persistence
+	// Non-admin API routes (no middleware needed here as they are public or handled internally)
 	r.POST("/test", func(c *gin.Context) {
 		var req struct {
 			Email string `json:"email" binding:"required,email"`
@@ -872,7 +892,7 @@ func main() {
 		}
 
 		mailFromDomain := strings.ToLower(strings.Split(req.Email, "@")[1])
-		fromHeader, ok := req.Headers["From"]
+		fromHeader, ok := req.Headers["From"] // Get "From" header from the map
 		if !ok || fromHeader == "" {
 			c.JSON(403, gin.H{"error": "Missing 'From' header for domain matching"})
 			return
@@ -889,27 +909,29 @@ func main() {
 			return
 		}
 
-		token := ExtractFirstToken(req.Subject, req.Body)
-		if token == "" || !strings.HasPrefix(token, "FIRM-TOKEN:") {
+		// CORRECTED: Extract token from req.Subject or req.Body
+		reqToken := ExtractFirstToken(req.Subject, req.Body)
+		if reqToken == "" || !strings.HasPrefix(reqToken, "FIRM-TOKEN:") {
 			c.JSON(400, gin.H{"error": "Invalid or missing token"})
 			return
 		}
 
 		tempTokensMutex.Lock()
 		defer tempTokensMutex.Unlock()
-		storedToken, exists := tempFirmTokens[token]
+		// CORRECTED: Use reqToken to access tempFirmTokens map
+		storedToken, exists := tempFirmTokens[reqToken]
 
 		if !exists || storedToken.Email != req.Email {
 			c.JSON(403, gin.H{"error": "Invalid or expired token"})
 			return
 		}
 		if storedToken.ExpiresAt.Before(time.Now().UTC()) {
-			delete(tempFirmTokens, token) // Remove expired token
+			delete(tempFirmTokens, reqToken) // CORRECTED: Delete using reqToken
 			c.JSON(400, gin.H{"error": "Token expired"})
 			return
 		}
 
-		delete(tempFirmTokens, token) // Consume the token
+		delete(tempFirmTokens, reqToken) // CORRECTED: Delete using reqToken
 		c.JSON(200, gin.H{"message": "Test token verified"})
 	})
 
@@ -1337,11 +1359,166 @@ func main() {
 	})
 
 
-	// Admin routes group (protected by JWT middleware)
-	adminGroup := r.Group("/admin")
+	// Admin UI Routes (these serve HTML templates)
+	adminUIGroup := r.Group("/admin")
 	{
-		// Middleware to check admin JWT
-		adminGroup.Use(func(c *gin.Context) {
+		// Dashboard UI - Fetches data server-side
+		adminUIGroup.GET("/dashboard", func(c *gin.Context) {
+			ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+			defer cancel()
+
+			var totalVerifiedEmails int
+			_ = db.QueryRow(ctx, "SELECT COUNT(*) FROM email_verifications WHERE verified = TRUE").Scan(&totalVerifiedEmails)
+
+			var activeJWTs int
+			_ = db.QueryRow(ctx, "SELECT COUNT(*) FROM tokens WHERE status = 'issued' AND expires_at > NOW()").Scan(&activeJWTs)
+
+			var blockedIPsToday int
+			today := time.Now().UTC().Truncate(24 * time.Hour)
+			_ = db.QueryRow(ctx, "SELECT COUNT(*) FROM ip_activity WHERE blocked = TRUE AND last_blocked >= $1", today).Scan(&blockedIPsToday)
+
+
+			var recentAdminEvents []gin.H = make([]gin.H, 0) // Ensure empty slice for JSON array
+			rows, err := db.Query(ctx, "SELECT timestamp, action, actor, target, notes FROM admin_events ORDER BY timestamp DESC LIMIT 10")
+			if err == nil { // Only process if query was successful
+				defer rows.Close()
+				for rows.Next() {
+					var ts time.Time
+					var action, actor string
+					var target, notes *string // Use pointers for nullable text fields
+					if err := rows.Scan(&ts, &action, &actor, &target, &notes); err == nil {
+						event := gin.H{
+							"Timestamp": ts.Format("2006-01-02 15:04:05 UTC"),
+							"Action":    action,
+							"Actor":     actor,
+							"Target":    "",
+							"Notes":     "",
+						}
+						if target != nil { event["Target"] = *target }
+						if notes != nil { event["Notes"] = *notes }
+						recentAdminEvents = append(recentAdminEvents, event)
+					}
+				}
+			} else {
+				log.Printf("ERROR: Failed to query recent admin events for dashboard UI: %v", err)
+			}
+
+
+			// Render the layout template, passing a dictionary with the content template name
+			c.HTML(200, "layout.html", gin.H{ // Changed to "layout.html"
+				"Title":   "Dashboard",
+				"ContentTemplate": "admin/dashboard.html", // Key to indicate which content template to render, now relative to templates/
+				"Stats": gin.H{
+					"TotalVerifiedEmails": totalVerifiedEmails,
+					"ActiveJWTs":          activeJWTs,
+					"BlockedIPsToday":     blockedIPsToday,
+				},
+				"RecentAdminEvents": recentAdminEvents,
+			})
+		})
+
+		// Subnets UI - Fetches data server-side
+		adminUIGroup.GET("/subnets_ui", func(c *gin.Context) {
+			ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+			defer cancel()
+
+			rows, err := db.Query(ctx, "SELECT subnet_hex, cidr, reason, banned_at, expires_at, hits FROM banned_subnets ORDER BY banned_at DESC")
+			if err != nil {
+				log.Printf("ERROR: Failed to query banned subnets for UI: %v", err)
+				c.JSON(500, gin.H{"error": "Failed to retrieve banned subnets for UI"})
+				return
+			}
+			defer rows.Close()
+
+			var subnets []gin.H = make([]gin.H, 0) // Initialize as empty, non-nil slice
+			for rows.Next() {
+				var subnetHex string
+				var cidr, hits int
+				var reason string
+				var bannedAt time.Time
+				var expiresAt *time.Time
+
+				if err := rows.Scan(&subnetHex, &cidr, &reason, &bannedAt, &expiresAt, &hits); err != nil {
+					log.Printf("ERROR: Failed to scan banned subnet row for UI: %v", err)
+					continue
+				}
+
+				subnet := gin.H{
+					"subnet_hex": subnetHex,
+					"cidr":       cidr,
+					"reason":     reason,
+					"banned_at":  bannedAt.Format(time.RFC3339),
+					"hits":       hits,
+				}
+				if expiresAt != nil {
+					subnet["expires_at"] = expiresAt.Format(time.RFC3339)
+				} else {
+					subnet["expires_at"] = nil
+				}
+				subnets = append(subnets, subnet)
+			}
+			c.HTML(200, "layout.html", gin.H{ // Changed to "layout.html"
+				"Title":           "Banned Subnets",
+				"ContentTemplate": "admin/subnets.html", // Specify the content template name, now relative to templates/
+				"Subnets": subnets,
+			})
+		})
+
+		// Placeholder UI routes
+		adminUIGroup.GET("/emails_ui", func(c *gin.Context) {
+			c.HTML(200, "layout.html", gin.H{"Title": "Admin Emails", "ContentTemplate": "admin/emails.html"})
+		})
+		adminUIGroup.GET("/ip_ui", func(c *gin.Context) {
+			c.HTML(200, "layout.html", gin.H{"Title": "IP Activity", "ContentTemplate": "admin/ip.html"})
+		})
+		adminUIGroup.GET("/settings_ui", func(c *gin.Context) {
+			// Fetch all settings to pre-populate the form
+			ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+			defer cancel()
+
+			rows, err := db.Query(ctx, "SELECT key, value, description FROM settings")
+			if err != nil {
+				log.Printf("ERROR: Failed to query settings for UI: %v", err)
+				c.JSON(500, gin.H{"error": "Failed to retrieve settings for UI"})
+				return
+			}
+			defer rows.Close()
+
+			settings := make([]gin.H, 0)
+			for rows.Next() {
+				var key, value, description string
+				if err := rows.Scan(&key, &value, &description); err != nil {
+					log.Printf("ERROR: Failed to scan setting row for UI: %v", err)
+					continue
+				}
+				settings = append(settings, gin.H{"Key": key, "Value": value, "Description": description})
+			}
+
+			c.HTML(200, "layout.html", gin.H{ // Changed to "layout.html"
+				"Title":    "Settings",
+				"ContentTemplate": "admin/settings.html", // Specify the content template name, now relative to templates/
+				"Settings": settings,
+			})
+		})
+		adminUIGroup.GET("/logs_ui", func(c *gin.Context) {
+			c.HTML(200, "layout.html", gin.H{"Title": "Admin Logs", "ContentTemplate": "admin/logs.html"})
+		})
+
+		// Simple logout endpoint (placeholder for now)
+		adminUIGroup.GET("/logout", func(c *gin.Context) {
+			// In a real app, this would clear client-side token and perhaps server-side session.
+			// For simplicity, we can just render a basic message and expect the client-side JS
+			// to clear the token and redirect.
+			c.String(200, "You have been logged out. Please clear your local storage.")
+		})
+	}
+
+
+	// Admin API Endpoints (these ARE protected by JWT middleware and return JSON)
+	adminApiGroup := r.Group("/admin/api") // NEW GROUP FOR JSON API CALLS
+	{
+		// Middleware to check admin JWT (APPLIED ONLY TO THIS GROUP)
+		adminApiGroup.Use(func(c *gin.Context) {
 			authHeader := c.GetHeader("Authorization")
 			if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
 				c.JSON(403, gin.H{"error": "Admin access required: Missing or invalid Authorization header"})
@@ -1378,31 +1555,93 @@ func main() {
 			c.Next()
 		})
 
-
-		// ✅ GET /admin/subnets()
-		adminGroup.GET("/subnets", func(c *gin.Context) {
+		// API endpoint to fetch dashboard stats
+		adminApiGroup.GET("/dashboard_stats", func(c *gin.Context) {
 			ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 			defer cancel()
 
-			rows, err := db.Query(ctx, "SELECT subnet_hex, cidr, reason, banned_at, expires_at, hits FROM banned_subnets")
+			var totalVerifiedEmails int
+			// Handle potential error, though unlikely for COUNT(*)
+			if err := db.QueryRow(ctx, "SELECT COUNT(*) FROM email_verifications WHERE verified = TRUE").Scan(&totalVerifiedEmails); err != nil {
+				log.Printf("ERROR: DB query for TotalVerifiedEmails: %v", err)
+				c.JSON(500, gin.H{"error": "Failed to fetch total verified emails"})
+				return
+			}
+
+			var activeJWTs int
+			if err := db.QueryRow(ctx, "SELECT COUNT(*) FROM tokens WHERE status = 'issued' AND expires_at > NOW()").Scan(&activeJWTs); err != nil {
+				log.Printf("ERROR: DB query for ActiveJWTs: %v", err)
+				c.JSON(500, gin.H{"error": "Failed to fetch active JWTs"})
+				return
+			}
+
+			var blockedIPsToday int
+			today := time.Now().UTC().Truncate(24 * time.Hour)
+			if err := db.QueryRow(ctx, "SELECT COUNT(*) FROM ip_activity WHERE blocked = TRUE AND last_blocked >= $1", today).Scan(&blockedIPsToday); err != nil {
+				log.Printf("ERROR: DB query for BlockedIPsToday: %v", err)
+				c.JSON(500, gin.H{"error": "Failed to fetch blocked IPs today"})
+				return
+			}
+
+			var recentAdminEvents []gin.H = make([]gin.H, 0)
+			rows, err := db.Query(ctx, "SELECT timestamp, action, actor, target, notes FROM admin_events ORDER BY timestamp DESC LIMIT 10")
 			if err != nil {
-				log.Printf("ERROR: Failed to query banned subnets: %v", err)
-				c.JSON(500, gin.H{"error": "Failed to retrieve banned subnets"})
+				log.Printf("ERROR: Failed to query recent admin events for API: %v", err)
+				// Don't return 500, just log and send partial data
+			} else {
+				defer rows.Close()
+				for rows.Next() {
+					var ts time.Time
+					var action, actor string
+					var target, notes *string
+					if err := rows.Scan(&ts, &action, &actor, &target, &notes); err != nil {
+						log.Printf("ERROR: Failed to scan admin event row for API: %v", err)
+						continue
+					}
+					event := gin.H{
+						"Timestamp": ts.Format("2006-01-02 15:04:05 UTC"),
+						"Action":    action,
+						"Actor":     actor,
+						"Target":    "",
+						"Notes":     "",
+					}
+					if target != nil { event["Target"] = *target }
+					if notes != nil { event["Notes"] = *notes }
+					recentAdminEvents = append(recentAdminEvents, event)
+				}
+			}
+
+			c.JSON(200, gin.H{
+				"TotalVerifiedEmails": totalVerifiedEmails,
+				"ActiveJWTs":          activeJWTs,
+				"BlockedIPsToday":     blockedIPsToday,
+				"RecentAdminEvents":   recentAdminEvents,
+			})
+		})
+
+		// ✅ GET /admin/api/subnets (API endpoint, now under adminApiGroup)
+		adminApiGroup.GET("/subnets", func(c *gin.Context) {
+			ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+			defer cancel()
+
+			rows, err := db.Query(ctx, "SELECT subnet_hex, cidr, reason, banned_at, expires_at, hits FROM banned_subnets ORDER BY banned_at DESC")
+			if err != nil {
+				log.Printf("ERROR: Failed to query banned subnets API: %v", err)
+				c.JSON(500, gin.H{"error": "Failed to retrieve banned subnets API"})
 				return
 			}
 			defer rows.Close()
 
-			// Initialize as an empty, non-nil slice to ensure it marshals to `[]` instead of `null`
-			var subnets []gin.H = make([]gin.H, 0)
+			var subnets []gin.H = make([]gin.H, 0) // Ensure empty slice for JSON array
 			for rows.Next() {
 				var subnetHex string
 				var cidr, hits int
 				var reason string
 				var bannedAt time.Time
-				var expiresAt *time.Time // Use pointer for nullable timestamp
+				var expiresAt *time.Time
 
 				if err := rows.Scan(&subnetHex, &cidr, &reason, &bannedAt, &expiresAt, &hits); err != nil {
-					log.Printf("ERROR: Failed to scan banned subnet row: %v", err)
+					log.Printf("ERROR: Failed to scan banned subnet API row: %v", err)
 					continue
 				}
 
@@ -1416,15 +1655,15 @@ func main() {
 				if expiresAt != nil {
 					subnet["expires_at"] = expiresAt.Format(time.RFC3339)
 				} else {
-					subnet["expires_at"] = nil // Explicitly nil for JSON
+					subnet["expires_at"] = nil
 				}
 				subnets = append(subnets, subnet)
 			}
 			c.JSON(200, subnets)
 		})
 
-		// ✅ POST /admin/subnet()
-		adminGroup.POST("/subnet", func(c *gin.Context) {
+		// ✅ POST /admin/api/subnet (API endpoint)
+		adminApiGroup.POST("/subnet", func(c *gin.Context) {
 			var req struct {
 				Subnet        string `json:"subnet" binding:"required"`
 				CIDR          int    `json:"cidr" binding:"required"`
@@ -1458,7 +1697,7 @@ func main() {
 			var cmdTag pgconn.CommandTag // Declared here once
 			// err is already declared by c.ShouldBindJSON, so use assignment
 			if req.Action == "add" {
-				cmdTag, err = db.Exec(ctx,
+				cmdTag, err = db.Exec(ctx, // Now it's an assignment
 					`INSERT INTO banned_subnets (subnet_hex, cidr, reason, banned_at, expires_at)
                      VALUES ($1, $2, $3, $4, $5)
                      ON CONFLICT (subnet_hex, cidr) DO UPDATE SET
@@ -1474,7 +1713,7 @@ func main() {
 					log.Printf("WARN: Add/update subnet %s/%d resulted in no rows affected.", req.Subnet, req.CIDR)
 				}
 			} else if req.Action == "delete" {
-				cmdTag, err = db.Exec(ctx, "DELETE FROM banned_subnets WHERE subnet_hex = $1 AND cidr = $2", subnetHex, req.CIDR)
+				cmdTag, err = db.Exec(ctx, "DELETE FROM banned_subnets WHERE subnet_hex = $1 AND cidr = $2", subnetHex, req.CIDR) // Assignment
 				if err != nil {
 					log.Printf("ERROR: Failed to delete banned subnet %s/%d: %v", req.Subnet, req.CIDR, err)
 					c.JSON(500, gin.H{"error": "Failed to delete subnet"})
@@ -1500,8 +1739,8 @@ func main() {
 			c.JSON(200, gin.H{"message": fmt.Sprintf("Subnet %s", req.Action)})
 		})
 
-		// ✅ GET /admin/ip/:ipaddress
-		adminGroup.GET("/ip/:ipaddress", func(c *gin.Context) {
+		// ✅ GET /admin/api/ip/:ipaddress (API endpoint)
+		adminApiGroup.GET("/ip/:ipaddress", func(c *gin.Context) {
 			ipStr := c.Param("ipaddress")
 			ipHex, err := IPNormalization(ipStr)
 			if err != nil {
@@ -1600,15 +1839,15 @@ func main() {
 			})
 		})
 
-		// ✅ GET /admin/emails() - Returns all admin_emails with IDs, paginated delivery
-		adminGroup.GET("/emails", func(c *gin.Context) {
+		// ✅ GET /admin/api/emails (API endpoint)
+		adminApiGroup.GET("/emails", func(c *gin.Context) {
 			ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 			defer cancel()
 
 			rows, err := db.Query(ctx, "SELECT email, added_at, added_by, expires_at, notes FROM admin_emails ORDER BY added_at DESC")
 			if err != nil {
-				log.Printf("ERROR: Failed to query admin emails: %v", err)
-				c.JSON(500, gin.H{"error": "Failed to retrieve admin emails"})
+				log.Printf("ERROR: Failed to query admin emails API: %v", err)
+				c.JSON(500, gin.H{"error": "Failed to retrieve admin emails API"})
 				return
 			}
 			defer rows.Close()
@@ -1621,7 +1860,7 @@ func main() {
 				var notes *string
 
 				if err := rows.Scan(&email, &addedAt, &addedBy, &expiresAt, &notes); err != nil {
-					log.Printf("ERROR: Failed to scan admin email row: %v", err)
+					log.Printf("ERROR: Failed to scan admin email API row: %v", err)
 					continue
 				}
 
@@ -1643,8 +1882,8 @@ func main() {
 			c.JSON(200, adminEmails)
 		})
 
-		// ✅ POST /admin/email() - Add/Delete/Change email records by ID (email in this case)
-		adminGroup.POST("/email", func(c *gin.Context) {
+		// ✅ POST /admin/api/email (API endpoint)
+		adminApiGroup.POST("/email", func(c *gin.Context) {
 			var req struct {
 				Email      string `json:"email" binding:"required,email"`
 				Action     string `json:"action" binding:"required"` // "add" or "delete"
@@ -1668,10 +1907,10 @@ func main() {
 				expiresAt = &exp
 			}
 
-			var cmdTag pgconn.CommandTag
+			var cmdTag pgconn.CommandTag // Declared here once
 			// err is already declared by c.ShouldBindJSON, so use assignment
 			if req.Action == "add" {
-				cmdTag, err = db.Exec(ctx,
+				cmdTag, err = db.Exec(ctx, // Now it's an assignment
 					`INSERT INTO admin_emails (email, added_at, added_by, expires_at, notes)
                      VALUES ($1, $2, $3, $4, $5)
                      ON CONFLICT (email) DO UPDATE SET
@@ -1685,7 +1924,7 @@ func main() {
 					return
 				}
 			} else if req.Action == "delete" {
-				cmdTag, err = db.Exec(ctx, "DELETE FROM admin_emails WHERE email = $1", req.Email)
+				cmdTag, err = db.Exec(ctx, "DELETE FROM admin_emails WHERE email = $1", req.Email) // Assignment
 				if err != nil {
 					log.Printf("ERROR: Failed to delete admin email %s: %v", req.Email, err)
 					c.JSON(500, gin.H{"error": "Failed to delete admin email"})
@@ -1711,8 +1950,8 @@ func main() {
 			c.JSON(200, gin.H{"message": fmt.Sprintf("Admin email %s", req.Action)})
 		})
 
-		// ✅ POST /admin/settings (key: STRING, value: STRING)
-		adminGroup.POST("/settings", func(c *gin.Context) {
+		// ✅ POST /admin/api/settings (API endpoint)
+		adminApiGroup.POST("/settings", func(c *gin.Context) {
 			var req struct {
 				Key   string `json:"key" binding:"required"`
 				Value string `json:"value" binding:"required"`
@@ -1815,3 +2054,4 @@ func main() {
 		log.Fatalf("FATAL: Failed to start server: %v", err)
 	}
 }
+
