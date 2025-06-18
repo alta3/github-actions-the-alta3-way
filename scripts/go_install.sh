@@ -28,11 +28,13 @@ if ! grep -q 'export PATH=$PATH:/usr/local/go/bin' "$PROFILE"; then
     echo 'export PATH=$PATH:$GOPATH/bin' >> "$PROFILE"
 fi
 
-# Source the profile to apply changes immediately for this session
-source "$PROFILE"
-
 # Create Go workspace
 mkdir -p "$HOME/go/bin" "$HOME/go/pkg" "$HOME/go/src"
 
 echo "Go $GO_VERSION installation completed!"
-echo "Run 'go version' to verify the installation."
+echo "To activate it now, run:"
+echo ""
+echo "    source ~/.profile"
+echo ""
+echo "📎 Then test with:"
+echo "    go version"
