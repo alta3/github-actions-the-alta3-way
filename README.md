@@ -55,9 +55,16 @@ Store secrets (e.g., PostgreSQL credentials) in a `.env` file, ignored by `.giti
     FIRM_USER=firmuser
     FIRM_PASSWORD=firmpass
     EOF
-    vim .env # Edit with your superuser credentials, e.g., PG_USER=roadmatric, PG_PASSWORD=roadmatrix-4d
-    # Keep FIRM_USER=firmuser, FIRM_PASSWORD=firmpass or set custom values
     ```
+
+0. Edit the .env file
+
+    ```bash
+    vim .env
+    ```
+
+    > Edit with your superuser credentials, e.g., **PG_USER=roadmatric**, **PG_PASSWORD=roadmatrix-4d**
+      Keep **FIRM_USER=firmuser**, **FIRM_PASSWORD=firmpass** or set custom values
 
 6. **Export `.env` variables**
 
