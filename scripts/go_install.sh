@@ -36,5 +36,6 @@ echo "To activate it now, run:"
 echo ""
 echo "    source ~/.profile"
 echo ""
-echo "📎 Then test with:"
+sleep 2
+echo "Then test with:"
 echo "    go version"
