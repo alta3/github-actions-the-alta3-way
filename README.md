@@ -115,6 +115,14 @@ Set up the `firm` database with a dedicated user for security. Use exported `.en
     fi
     ```
 
+0. Test connection as firmuser
+
+    ```bash
+    PGPASSWORD=$FIRM_PASSWORD psql -U $FIRM_USER -h $PG_HOST -p $PG_PORT -d $PG_DB
+    ```
+
+    > Exit with `exit`
+
 10. **Update `.env` with database credentials**
 
     Edit `.env` to use the new user for server operations:
