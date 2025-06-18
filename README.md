@@ -33,8 +33,8 @@ FIRM is a passwordless authentication server based on draft-feeser-firm-auth-08.
 3. **Clone the repo**
 
     ```bash
-    git clone https://github.com/sfeeser/firm.git
-    cd firm
+    git clone https://github.com/alta3/github-actions-the-alta3-way.git
+    cd ~/github-actions-the-alta3-way
     ```
 
 4. **Install dependencies**
@@ -90,7 +90,7 @@ Set up the `firm` database with a dedicated user for security. Use exported `.en
 
     ```bash
     sudo apt update
-    sudo apt install postgresql postgresql-contrib
+    sudo apt install postgresql postgresql-contrib -y
     sudo systemctl start postgresql
     sudo systemctl enable postgresql
     ```
