@@ -13,7 +13,15 @@ FIRM is a passwordless authentication server based on draft-feeser-firm-auth-08.
 
 ## Installation
 
-1. **Check your Go version**
+
+1. **Clone the repo**
+
+    ```bash
+    git clone https://github.com/alta3/github-actions-the-alta3-way.git
+    cd ~/github-actions-the-alta3-way
+    ```
+
+0. **Check your Go version**
 
     ```bash
     go version # Should output go1.24.2 linux/amd64
@@ -22,19 +30,7 @@ FIRM is a passwordless authentication server based on draft-feeser-firm-auth-08.
 2. **Install Go** (if not installed)
 
     ```bash
-    wget https://go.dev/dl/go1.24.2.linux-amd64.tar.gz
-    sudo tar -C /usr/local -xzf go1.24.2.linux-amd64.tar.gz
-    export PATH=$PATH:/usr/local/go/bin
-    # Add to ~/.bashrc for persistence
-    echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
-    source ~/.bashrc
-    ```
-
-3. **Clone the repo**
-
-    ```bash
-    git clone https://github.com/alta3/github-actions-the-alta3-way.git
-    cd ~/github-actions-the-alta3-way
+    ./scripts/go_install.sh 
     ```
 
 4. **Install dependencies**
