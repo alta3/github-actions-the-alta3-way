@@ -47,8 +47,8 @@ Store secrets (e.g., PostgreSQL credentials) in a `.env` file, ignored by `.giti
 
     ```bash
     cat <<EOF > .env
-    PG_USER=your_postgres_user
-    PG_PASSWORD=your_postgres_password
+    PG_USER=postgres
+    PG_PASSWORD=password
     PG_HOST=localhost
     PG_PORT=5432
     PG_DB=firm
@@ -104,14 +104,14 @@ Set up the `firm` database with a dedicated user for security. Use exported `.en
 
     ```bash
     # Uses PG_USER, PG_PASSWORD, PG_HOST, PG_PORT, FIRM_USER, FIRM_PASSWORD from .env
-    cat <<EOF | PGPASSWORD=$PG_PASSWORD psql -U $PG_USER -h $PG_HOST -p $PG_PORT -d postgres
+    sudo -u postgres psql <<EOF
     CREATE USER $FIRM_USER WITH PASSWORD '$FIRM_PASSWORD';
     CREATE DATABASE $PG_DB OWNER $FIRM_USER;
     GRANT ALL PRIVILEGES ON DATABASE $PG_DB TO $FIRM_USER;
     EOF
+
     if [ $? -ne 0 ]; then
         echo "Error: Failed to create user or database. Check .env credentials."
-        exit 1
     fi
     ```
 
